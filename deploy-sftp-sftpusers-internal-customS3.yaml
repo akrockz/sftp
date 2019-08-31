@@ -1,0 +1,115 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: 'AWS SFTP users  - resources'
+Parameters:
+  SftpStackName:
+    Type: String
+    Default: "coreservices-sftp-sftpserver"
+  TargetS3Bucket:  # Default S3 bucket is on service acct. Can point to other S3 bucket Name but need Custom RoleArn
+    Type: String
+    Default: "abc-nonprod-s3reportdata"
+  UserName:
+    Type: String
+    Default: "kefta"
+  OwnerName:
+    Type: String
+    Default: "kefta wong"
+  UserNamePath:
+    Type: String
+    Default: "kefta"
+  KmsKeyArn:
+    Type: String
+    Default: "arn:aws:kms:ap-southeast-1:206846147:key/1894dc89-0e9d-480a-bbe6-08ec4da9"
+  PublicKey:
+    Type: String
+    Default: ""
+
+Mappings:
+  # prod service account
+  "484982709":
+    ap-southeast-1:
+      Environment: prod
+
+  # nonprod service account
+  "928168288":
+    ap-southeast-1:
+      Environment: nonprod
+
+Conditions:
+  ServiceAccount:
+    Fn::Or:
+      - Fn::Equals: [ Ref: 'AWS::AccountId', '484982709' ]  # prod-service
+      - Fn::Equals: [ Ref: 'AWS::AccountId', '928167288' ]  # nonprod-service
+  CustomPath: !Not [!Equals [!Ref UserNamePath, ""]]
+
+Resources:
+
+  BucketRole:
+    Type: "AWS::IAM::Role"
+    Condition: ServiceAccount
+    Properties: 
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "transfer.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      RoleName: !Join ['-', ["sftp", !Ref TargetS3Bucket, !Ref UserName]]
+      Policies:
+        - PolicyName: "s3bucketaccess"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "s3:ListBucket"
+                  - "s3:GetBucketLocation"
+                Resource:
+                  - !Join ['', ["arn:aws:s3:::", !Ref TargetS3Bucket]]
+              - Effect: Allow
+                Action:
+                  - s3:Put*
+                  - s3:Get*
+                  - s3:Delete*
+                Resource:
+                  - !Join
+                    - ''
+                    - - "arn:aws:s3:::"
+                      - !Ref TargetS3Bucket
+                      - !If [ CustomPath, !Sub "/home/${UserNamePath}", !Sub "/home/${UserName}" ]
+                      - "/*"
+              - Effect: Allow
+                Action:
+                  - kms:Encrypt
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                  - kms:GenerateDataKey*
+                  - kms:ReEncrypt*
+                Resource: !Ref KmsKeyArn
+
+
+  InternalSftpUser:
+    Type: AWS::Transfer::User
+    Condition: ServiceAccount
+    Properties:
+      UserName: !Ref UserName
+      HomeDirectory:
+        !Join
+        - ''
+        - - "/"
+          - !Ref TargetS3Bucket
+          - !If [ CustomPath, !Sub "/home/${UserNamePath}", !Sub "/home/${UserName}" ]
+      Role:
+        Fn::GetAtt: [ BucketRole, Arn ]
+      ServerId:
+        Fn::ImportValue:
+          Fn::Sub: "${SftpStackName}:InternalSftpServerId"
+      SshPublicKeys:
+        - !Ref PublicKey
+      Tags:
+        - Key: Owner
+          Value: !Ref OwnerName
