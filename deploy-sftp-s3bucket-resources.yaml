@@ -1,0 +1,330 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: 'S3 Bucket + S3 role for AWS SFTP  - resources'
+Parameters:
+  Name:
+    Type: String
+    Default: ""
+  CustomKMSKey:
+    Type: String
+    Default: "no"
+    AllowedValues:
+      - 'yes'
+      - 'no'
+
+Conditions:
+  ServiceAccount:
+    Fn::Or:
+      - Fn::Equals: [ Ref: 'AWS::AccountId', '482771709' ]  # prod-service
+      - Fn::Equals: [ Ref: 'AWS::AccountId', '92816788' ]  # nonprod-service
+  KmsKeyDoesNotExist: { "Fn::Equals": [ Ref: CustomKMSKey, "no" ] }
+  KmsKeyExists: { "Fn::Not": [ Condition: KmsKeyDoesNotExist ] }
+
+Mappings:
+  # prod service account
+  "4849809":
+    ap-southeast-1:
+      Environment: prod
+      KmsKeyArn: arn:aws:kms:ap-southeast-1:206946147:key/3dfa21a3-4a48-40bf-9ed9-bd14d9db5cba
+
+  # nonprod service account
+  "928178288":
+    ap-southeast-1:
+      Environment: nonprod
+      KmsKeyArn: arn:aws:kms:ap-southeast-1:20646147:key/2e90f462-b0fb-4918-b2fe-201628e22d38
+
+Resources:
+  # Bulk of Resource declaration here
+  InternalS3Bucket:
+    Type: AWS::S3::Bucket
+    Condition: ServiceAccount
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Join ['-', [!Ref Name, "internal", !FindInMap [Ref: "AWS::AccountId", Ref: "AWS::Region", Environment] ]]
+      LifecycleConfiguration:
+        Rules:
+          -
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 3
+            ExpirationDate: {'Ref': 'AWS::NoValue'}
+            ExpirationInDays: 90
+            Id: !Join ['-', ["sftp-internal", !FindInMap [Ref: "AWS::AccountId", Ref: "AWS::Region", Environment] ]]
+            NoncurrentVersionExpirationInDays: {'Ref': 'AWS::NoValue'}
+            Prefix: home/
+            Status: Enabled
+            Transitions:
+              -
+                StorageClass: "GLACIER"
+                TransitionDate: {'Ref': 'AWS::NoValue'}
+                TransitionInDays: 30
+
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - Fn::If:
+              - KmsKeyExists
+              - ServerSideEncryptionByDefault:
+                  SSEAlgorithm: aws:kms
+                  KMSMasterKeyID:
+                    !FindInMap [Ref: "AWS::AccountId", Ref: "AWS::Region", KmsKeyArn]
+              - ServerSideEncryptionByDefault:
+                  SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+
+  ExternalS3Bucket:
+    Type: AWS::S3::Bucket
+    Condition: ServiceAccount
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Join ['-', [!Ref Name, "external", !FindInMap [Ref: "AWS::AccountId", Ref: "AWS::Region", Environment] ]]
+      LifecycleConfiguration:
+        Rules:
+          -
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 3
+            ExpirationDate: {'Ref': 'AWS::NoValue'}
+            ExpirationInDays: 90
+            Id: !Join ['-', ["sftp-external", !FindInMap [Ref: "AWS::AccountId", Ref: "AWS::Region", Environment] ]]
+            NoncurrentVersionExpirationInDays: {'Ref': 'AWS::NoValue'}
+            Prefix: home/
+            Status: Enabled
+            Transitions:
+              -
+                StorageClass: "GLACIER"
+                TransitionDate: {'Ref': 'AWS::NoValue'}
+                TransitionInDays: 30
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - Fn::If:
+              - KmsKeyExists
+              - ServerSideEncryptionByDefault:
+                  SSEAlgorithm: aws:kms
+                  KMSMasterKeyID:
+                    !FindInMap [Ref: "AWS::AccountId", Ref: "AWS::Region", KmsKeyArn]
+              - ServerSideEncryptionByDefault:
+                  SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+
+  BucketRole:
+    Type: "AWS::IAM::Role"
+    Condition: ServiceAccount
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "transfer.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      RoleName: !Join ['-', [!Ref Name, "s3role"]]
+      Policies:
+        - PolicyName: "s3bucketaccess"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "s3:ListBucket"
+                  - "s3:GetBucketLocation"
+                Resource:
+                  - !Join ['', ["arn:aws:s3:::", !Ref InternalS3Bucket]]
+                  - !Join ['', ["arn:aws:s3:::", !Ref ExternalS3Bucket]]
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObjectVersion
+                  - s3:DeleteObject
+                  - s3:GetObjectVersion
+                Resource:
+                  - !Join ['', ["arn:aws:s3:::", !Ref InternalS3Bucket, "/*"]]
+                  - !Join ['', ["arn:aws:s3:::", !Ref ExternalS3Bucket, "/*"]]
+              - Effect: Allow
+                Action:
+                  - kms:Encrypt
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                  - kms:GenerateDataKey*
+                  - kms:ReEncrypt*
+                Resource: !FindInMap [Ref: "AWS::AccountId", Ref: "AWS::Region", KmsKeyArn]
+
+  SFTPUserScopeDownPolicyReadWrite:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: 'SFTPUserScopeDownPolicy-ReadWrite'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:ListBucket
+            Resource:
+              - "arn:aws:s3:::${transfer:HomeBucket}"
+            Condition:
+              StringLike:
+                s3:prefix:
+                  - "${transfer:HomeFolder}/*"
+                  - "${transfer:HomeFolder}"
+          - Effect: Allow
+            Action:
+              - s3:ListAllMyBuckets
+              - s3:GetBucketLocation
+            Resource:
+              - "*"
+          - Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:GetObject
+              - s3:DeleteObjectVersion
+              - s3:DeleteObject
+              - s3:GetObjectVersion
+            Resource:
+              - "arn:aws:s3:::${transfer:HomeDirectory}*"
+          - Effect: Allow
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:DescribeKey
+              - kms:GenerateDataKey*
+              - kms:ReEncrypt*
+            Resource: !FindInMap [Ref: "AWS::AccountId", Ref: "AWS::Region", KmsKeyArn]
+          - Effect: Deny
+            Action:
+              - s3:PutObject
+            Resource:
+              - "arn:aws:s3:::${transfer:HomeBucket}/* *"  # reject filename with blanks
+
+  SFTPUserScopeDownPolicyReadOnly:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: 'SFTPUserScopeDownPolicy-ReadOnly'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:ListBucket
+            Resource:
+              - "arn:aws:s3:::${transfer:HomeBucket}"
+            Condition:
+              StringLike:
+                s3:prefix:
+                  - "${transfer:HomeFolder}/*"
+                  - "${transfer:HomeFolder}"
+          - Effect: Allow
+            Action:
+              - s3:ListAllMyBuckets
+              - s3:GetBucketLocation
+            Resource:
+              - "*"
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:GetObjectVersion
+            Resource:
+              - "arn:aws:s3:::${transfer:HomeDirectory}*"
+          - Effect: Allow
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:DescribeKey
+              - kms:GenerateDataKey*
+              - kms:ReEncrypt*
+            Resource: !FindInMap [Ref: "AWS::AccountId", Ref: "AWS::Region", KmsKeyArn]
+          - Effect: Deny
+            Action:
+              - s3:PutObject
+            Resource:
+              - "arn:aws:s3:::${transfer:HomeBucket}/* *"
+
+  SFTPUserScopeDownPolicyWriteOnly:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: 'SFTPUserScopeDownPolicy-WriteOnly'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:ListBucket
+            Resource:
+              - "arn:aws:s3:::${transfer:HomeBucket}"
+            Condition:
+              StringLike:
+                s3:prefix:
+                  - "${transfer:HomeFolder}/*"
+                  - "${transfer:HomeFolder}"
+          - Effect: Allow
+            Action:
+              - s3:ListAllMyBuckets
+              - s3:GetBucketLocation
+            Resource:
+              - "*"
+          - Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:PutObjectVersion
+            Resource:
+              - "arn:aws:s3:::${transfer:HomeDirectory}*"
+          - Effect: Allow
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:DescribeKey
+              - kms:GenerateDataKey*
+              - kms:ReEncrypt*
+            Resource: !FindInMap [Ref: "AWS::AccountId", Ref: "AWS::Region", KmsKeyArn]
+          - Effect: Deny
+            Action:
+              - s3:PutObject
+            Resource:
+              - "arn:aws:s3:::${transfer:HomeBucket}/* *"
+
+Outputs:
+  BucketRole:
+    Value:
+      Ref: BucketRole
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}:RoleName"
+
+  BucketRoleArn:
+    Value:
+      Fn::GetAtt: [ BucketRole, Arn ]
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}:RoleArn"
+
+  InternalS3Bucket:
+    Value: !Ref InternalS3Bucket
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}:BucketNameInternal"
+
+  ExternalS3Bucket:
+    Value: !Ref ExternalS3Bucket
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}:BucketNameExternal"
+
+  SFTPUserScopeDownPolicyReadWrite:
+    Value: !Ref SFTPUserScopeDownPolicyReadWrite
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}:SFTPUserScopeDownPolicyReadWrite"
+
+  SFTPUserScopeDownPolicyReadOnly:
+    Value: !Ref SFTPUserScopeDownPolicyReadOnly
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}:SFTPUserScopeDownPolicyReadOnly"
+
+  SFTPUserScopeDownPolicyWriteOnly:
+    Value: !Ref SFTPUserScopeDownPolicyWriteOnly
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}:SFTPUserScopeDownPolicyWriteOnly"
