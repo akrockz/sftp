@@ -1,0 +1,88 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: "AWS SFTP - DNS name"
+
+Parameters:
+  Name:
+    Type: String
+    Default: ""
+  SftpStackName:
+    Type: String
+    Default: ""    
+
+Mappings:
+  # prod service account
+  "48491709":
+    ap-southeast-1:
+      internalvpcedns: 'vpce-093151a363719-432odbg0.server.transfer.ap-southeast-1.vpce.amazonaws.com'
+
+  # nonprod service account
+  "92818288":
+    ap-southeast-1:
+      internalvpcedns: 'vpce-0dd1fc08d8b29-s6bobii4.server.transfer.ap-southeast-1.vpce.amazonaws.com'
+
+Conditions:
+  ServiceAccount:
+    Fn::Or:
+      - Fn::Equals: [ Ref: 'AWS::AccountId', '484971709' ]  # prod-service
+      - Fn::Equals: [ Ref: 'AWS::AccountId', '928178288' ]  # nonprod-service
+
+  ServiceNonProd:
+    Fn::Equals: [ Ref: 'AWS::AccountId', '92818288' ]
+
+  ServiceProd:
+    Fn::Equals: [ Ref: 'AWS::AccountId', '484971709' ]
+
+Resources:
+  # HostedZoneName = services.nonprod.c0.abc.com and services.prod.c0.abc.com
+
+  SFTPInternalDNS:
+    Type: AWS::Route53::RecordSet
+    Condition: ServiceAccount
+    Description: 'Nice DNS name for AWS SFTP InternalVPCE'
+    Properties:
+      HostedZoneName:
+        Fn::ImportValue: core-network:HostedZoneName
+      Name:
+        # The 'nice' dns name.
+        Fn::Join: [ '.', [ 'sftp', { 'Fn::ImportValue': 'core-network:HostedZoneName' } ]]
+      Type: CNAME
+      TTL: '60'
+      ResourceRecords:
+        - { 'Fn::FindInMap': [ Ref: 'AWS::AccountId', Ref: 'AWS::Region', internalvpcedns] }
+
+  SFTPExternalDNS:
+    Type: AWS::Route53::RecordSet
+    Condition: ServiceAccount
+    Description: 'Nice DNS name for AWS SFTP internet facing NLB'
+    Properties:
+      HostedZoneName:
+        Fn::ImportValue: core-network:PublicOnlyRootHostedZoneName
+      Name:
+        # The 'nice' dns name.
+        Fn::Join: [ '.', [ 'sftp', { 'Fn::ImportValue': 'core-network:PublicOnlyRootHostedZoneName' } ]]
+      Type: CNAME
+      TTL: '60'
+      ResourceRecords:
+        - Fn::ImportValue:
+            Fn::Sub: "${SftpStackName}:NLBSftpDNSName"
+
+Outputs:
+  StackName:
+    Value:
+      Ref: AWS::StackName
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}:StackName"
+
+  InternalSftpDNS:
+    Value: !Ref SFTPInternalDNS
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}:InternalSftpDNS"          
+
+  ExternalSftpDNS:
+    Value: !Ref SFTPExternalDNS
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}:ExternalSftpDNS"          
