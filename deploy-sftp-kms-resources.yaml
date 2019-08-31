@@ -1,0 +1,85 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "AWS SFTP - KMS key"
+
+Parameters:
+  Name:
+    Type: String
+    Default: ""
+
+  TargetAccount:
+    Type: String
+    Default: ""
+
+Conditions:
+  ComplianceAccount:
+    Fn::Equals: [ Ref: 'AWS::AccountId', '2946147' ]  # compliance acct
+
+Resources:
+
+  KmsKey:
+    Type: AWS::KMS::Key
+    Condition: ComplianceAccount
+    Properties:
+      Description: !Ref Name
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Id: KeyPolicy
+        Statement:
+          - Sid: Full permissions for account hosting the key
+            Effect: Allow
+            Principal:
+              AWS:
+                - Fn::Sub: "arn:aws:iam::${AWS::AccountId}:root"
+            Action:
+              - kms:*
+            Resource: "*"
+
+          - Sid: Delegate use of key to selected accounts
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Join [':', ["arn:aws:iam:", !Ref TargetAccount, "root"]]
+            Action:
+              - kms:Decrypt
+              - kms:DescribeKey
+              - kms:Encrypt
+              - kms:GenerateDataKey*
+              - kms:ReEncrypt*
+            Resource: "*"
+
+          - Sid: Delegate grants to selected accounts
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Join [':', ["arn:aws:iam:", !Ref TargetAccount, "root"]]
+            Action:
+              - kms:CreateGrant
+              - kms:ListGrants
+              - kms:ListRetirableGrants
+              - kms:RetireGrant
+              - kms:RevokeGrant
+            Resource: "*"
+            Condition:
+              Bool:
+                kms:GrantIsForAWSResource: true
+
+  KmsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Join ['/', ["alias", !Ref Name]]
+      TargetKeyId:
+        Ref: KmsKey
+
+Outputs:
+  KmsKeyName:
+    Value:
+      Ref: KmsKey
+
+  KmsKeyArn:
+    Value:
+      Fn::GetAtt: [ KmsKey, Arn ]
+
+  KmsKeyAliasName:
+    Value:
+      Ref: KmsKeyAlias
