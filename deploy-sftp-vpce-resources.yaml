@@ -1,0 +1,101 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: 'VPCE for AWS SFTP  - resources'
+Parameters:
+  Name:
+    Type: String
+    Default: ""
+  VpcName:
+    Type: String
+    Default: ""
+  AzList:
+    Description: Comma delimited list of AZs in this region
+    Type: String
+    Default: ""
+  SecurityGroupStackName:
+    Type: String
+    Default: ""
+
+Conditions:
+  NonProd:
+    Fn::Equals: [ Ref: 'AWS::AccountId', '92818288' ]  # nonprod-service
+  Prod:
+    Fn::Equals: [ Ref: 'AWS::AccountId', '484982709' ]  # prod-service  
+  ThreeAzs: { "Fn::Not": [ "Fn::Equals": [ "Fn::Select": [ 2, "Fn::Split": [ ",",  "Fn::Sub": "${AzList},," ] ], "" ] ] }
+
+Resources:
+  # Bulk of Resource declaration here
+  VPCEsftpEndpointNonProd:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: NonProd
+    Properties:
+      ServiceName:
+        Fn::Sub: "com.amazonaws.${AWS::Region}.transfer.server"
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub: "core-network:${VpcName}:VpcId"
+      SecurityGroupIds:
+        - Fn::ImportValue:
+            Fn::Sub: "${SecurityGroupStackName}:SecurityGroupIdInternalNonProd1"
+        - Fn::ImportValue:
+            Fn::Sub: "${SecurityGroupStackName}:SecurityGroupIdExternalNonProd1"
+      VpcEndpointType: "Interface"
+      SubnetIds:
+        Fn::If:
+          - ThreeAzs
+          - - Fn::ImportValue:
+                Fn::Sub: "core-network:${VpcName}:PrivateSubnet1Id"
+            - Fn::ImportValue:
+                Fn::Sub: "core-network:${VpcName}:PrivateSubnet2Id"
+            - Fn::ImportValue:
+                Fn::Sub: "core-network:${VpcName}:PrivateSubnet3Id"
+          - - Fn::ImportValue:
+                Fn::Sub: "core-network:${VpcName}:PrivateSubnet1Id"
+            - Fn::ImportValue:
+                Fn::Sub: "core-network:${VpcName}:PrivateSubnet2Id"
+
+  VPCEsftpEndpointProd:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: Prod
+    Properties:
+      ServiceName:
+        Fn::Sub: "com.amazonaws.${AWS::Region}.transfer.server"
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub: "core-network:${VpcName}:VpcId"
+      SecurityGroupIds:
+        - Fn::ImportValue:
+            Fn::Sub: "${SecurityGroupStackName}:SecurityGroupIdInternalProd1"
+        - Fn::ImportValue:
+            Fn::Sub: "${SecurityGroupStackName}:SecurityGroupIdExternalProd1"
+      VpcEndpointType: "Interface"
+      SubnetIds:
+        Fn::If:
+          - ThreeAzs
+          - - Fn::ImportValue:
+                Fn::Sub: "core-network:${VpcName}:PrivateSubnet1Id"
+            - Fn::ImportValue:
+                Fn::Sub: "core-network:${VpcName}:PrivateSubnet2Id"
+            - Fn::ImportValue:
+                Fn::Sub: "core-network:${VpcName}:PrivateSubnet3Id"
+          - - Fn::ImportValue:
+                Fn::Sub: "core-network:${VpcName}:PrivateSubnet1Id"
+            - Fn::ImportValue:
+                Fn::Sub: "core-network:${VpcName}:PrivateSubnet2Id"
+
+Outputs:
+  VPCEsftpEndpointNonProd:
+    Condition: NonProd
+    Value:
+      Ref: VPCEsftpEndpointNonProd
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}:VPCEsftpEndpoint"
+
+  VPCEsftpEndpointProd:
+    Condition: Prod
+    Value:
+      Ref: VPCEsftpEndpointProd
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}:VPCEsftpEndpoint"
