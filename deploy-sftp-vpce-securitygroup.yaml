@@ -1,0 +1,116 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: 'Security Group for AWS SFTP VPCE'
+
+Parameters:
+  VpcName:
+    Type: String
+    Default: ""
+
+  Name:
+    Type: String
+    Default: ""
+
+Conditions:
+  NonProd:
+    Fn::Equals: [ Ref: 'AWS::AccountId', '92878288' ]  # nonprod-service
+  Prod:
+    Fn::Equals: [ Ref: 'AWS::AccountId', '4849709' ]  # prod-service
+
+Resources:
+
+  SecurityGroupInternalNonProd1:
+    Type: AWS::EC2::SecurityGroup
+    Condition: NonProd
+    Properties:
+      GroupDescription: "VPCE Security Group Internal Users for NonProd Env"
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub: "core-network:${VpcName}:VpcId"      
+      Tags:
+        - Key: Name
+          Value: !Join ['-', [!Ref Name, "Internal"]]
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: '22', ToPort: '22', CidrIp: 1912.1168.0.0/16, Description: "DFE Server" }
+ 
+
+  SecurityGroupExternalNonProd1:
+    Type: AWS::EC2::SecurityGroup
+    Condition: NonProd
+    Properties:
+      GroupDescription: "VPCE Security Group External Users for NonProd Env"
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub: "core-network:${VpcName}:VpcId"      
+      Tags:
+        - Key: Name
+          Value: !Join ['-', [!Ref Name, "External"]]
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: '22', ToPort: '22', CidrIp: '521.714.123.140/32', Description: "IGW Old Dev AWS" }
+
+  SecurityGroupInternalProd1:
+    Type: AWS::EC2::SecurityGroup
+    Condition: Prod
+    Properties:
+      GroupDescription: "VPCE Security Group Internal Users for Prod Env"
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub: "core-network:${VpcName}:VpcId"      
+      Tags:
+        - Key: Name
+          Value: !Join ['-', [!Ref Name, "Internal"]]
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: '22', ToPort: '22', CidrIp: 101.619.0.0/16, Description: "SDR LAN" }
+
+  SecurityGroupExternalProd1:
+    Type: AWS::EC2::SecurityGroup
+    Condition: Prod
+    Properties:
+      GroupDescription: "VPCE Security Group External Users for Prod Env"
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub: "core-network:${VpcName}:VpcId"      
+      Tags:
+        - Key: Name
+          Value: !Join ['-', [!Ref Name, "External"]]
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: '22', ToPort: '22', CidrIp: '512.2121.812.96/32', Description: "IGW Old Prod AWS" }
+
+Outputs:
+  StackName:
+    Value:
+      Ref: AWS::StackName
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}:StackName"
+
+  SecurityGroupIdInternalNonProd1:
+    Condition: NonProd
+    Value:
+      Ref: SecurityGroupInternalNonProd1
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}:SecurityGroupIdInternalNonProd1"
+
+  SecurityGroupExternalNonProdId1:
+    Condition: NonProd
+    Value:
+      Ref: SecurityGroupExternalNonProd1
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}:SecurityGroupIdExternalNonProd1"
+
+  SecurityGroupIdInternalProd1:
+    Condition: Prod
+    Value:
+      Ref: SecurityGroupInternalProd1
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}:SecurityGroupIdInternalProd1"
+
+  SecurityGroupIdExternalProd1:
+    Condition: Prod
+    Value:
+      Ref: SecurityGroupExternalProd1
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}:SecurityGroupIdExternalProd1"
