@@ -1,0 +1,142 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: 'AWS SFTP server  - resources'
+Parameters:
+  Name:
+    Type: String
+    Default: ""
+  VpceStackName:
+    Type: String
+    Default: ""
+  CloudWatchStackName:
+    Type: String
+    Default: ""
+  Portfolio:
+    Type: String
+    Default: ""
+  App:
+    Type: String
+    Default: ""
+  AzList:
+    Type: String
+    Default: ""
+  VpcName:
+    Type: String
+    Default: ""
+
+Mappings:
+  # prod service account
+  "48498709":
+    ap-southeast-1:
+      vpceIPs:  # TODO dont hardcode !! How to get this IP from CloudFormation ??
+        - Id: "101.2118.1113.99"
+        - Id: "101.1181.1115.105"
+        - Id: "101.1118.1117.186"
+
+  # nonprod service account
+  "928167378288":
+    ap-southeast-1:
+      vpceIPs:  # TODO dont hardcode !! How to get this IP from CloudFormation ??
+        - Id: "110.1119.113.234"
+        - Id: "101.1119.114.170"
+        - Id: "101.1119.116.153"
+
+Conditions:
+  ServiceAccount:
+    Fn::Or:
+      - Fn::Equals: [ Ref: 'AWS::AccountId', '484982709' ]  # prod-service
+      - Fn::Equals: [ Ref: 'AWS::AccountId', '92378288' ]  # nonprod-service
+  ThreeAzs: { "Fn::Not": [ "Fn::Equals": [ "Fn::Select": [ 2, "Fn::Split": [ ",",  "Fn::Sub": "${AzList},," ] ], "" ] ] }      
+
+Resources:
+
+  InternalSftpServer:
+    Type: AWS::Transfer::Server
+    Condition: ServiceAccount
+    Properties:
+      EndpointDetails:
+        VpcEndpointId:
+          Fn::ImportValue:
+            Fn::Sub: "${VpceStackName}:VPCEsftpEndpoint"
+      EndpointType: "VPC_ENDPOINT"
+      IdentityProviderType: "SERVICE_MANAGED"
+      LoggingRole:
+        Fn::ImportValue:
+          Fn::Sub: "${CloudWatchStackName}:RoleArn"
+      Tags:
+        - Key: Portfolio
+          Value: !Ref Portfolio
+        - Key: App
+          Value: !Ref App
+
+  ExternalSftpServerNLB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Condition: ServiceAccount
+    Properties:
+      IpAddressType: "ipv4"
+      # LoadBalancerAttributes:
+      #  - LoadBalancerAttribute
+      Name: !Sub "${Name}NLB"
+      Scheme: "internet-facing"
+      Subnets:
+        Fn::If:
+          - ThreeAzs
+          - - Fn::ImportValue:
+                Fn::Sub: "core-network:${VpcName}:DmzSubnet1Id"
+            - Fn::ImportValue:
+                Fn::Sub: "core-network:${VpcName}:DmzSubnet2Id"
+            - Fn::ImportValue:
+                Fn::Sub: "core-network:${VpcName}:DmzSubnet3Id"
+          - - Fn::ImportValue:
+                Fn::Sub: "core-network:${VpcName}:DmzSubnet1Id"
+            - Fn::ImportValue:
+                Fn::Sub: "core-network:${VpcName}:DmzSubnet2Id"
+      Tags:
+        - Key: Portfolio
+          Value: !Ref Portfolio
+        - Key: App
+          Value: !Ref App
+      Type: "network"
+
+  NLBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Condition: ServiceAccount
+    Properties:
+      Port: 22
+      Protocol: TCP
+      TargetType: "ip"
+      Targets: !FindInMap [Ref: "AWS::AccountId", Ref: "AWS::Region", vpceIPs]
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub: "core-network:${VpcName}:VpcId"
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '120'
+
+  ExternalSftpServerNLBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: ServiceAccount
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref NLBTargetGroup
+      LoadBalancerArn: !Ref ExternalSftpServerNLB
+      Port: 22
+      Protocol: "TCP"
+
+Outputs:
+
+  InternalSftpServerId:
+    Value: !GetAtt InternalSftpServer.ServerId
+    Export:
+      Name: !Sub "${AWS::StackName}:InternalSftpServerId"
+
+  InternalSftpServerArn:
+    Value: !GetAtt InternalSftpServer.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}:InternalSftpServerArn"
+
+  NLBSftpDNSName:
+    Value: !GetAtt ExternalSftpServerNLB.DNSName
+    Export:
+      Name: !Sub "${AWS::StackName}:NLBSftpDNSName"
