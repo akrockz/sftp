@@ -1,0 +1,90 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: 'AWS SFTP users  - resources'
+Parameters:
+  SftpStackName:
+    Type: String
+    Default: ""
+  S3StackName:
+    Type: String
+    Default: ""
+  S3BucketInternal:  # Default S3 bucket is on service acct. Can point to other S3 bucket Name but need Custom RoleArn
+    Type: String
+    Default: "coreservices-sftp-s3bucket-internal"
+  S3BucketExternal:
+    Type: String
+    Default: "coreservices-sftp-s3bucket-external"
+  ScopeDownPolicy:
+    Type: String
+    Default: "deny"
+    AllowedValues: ["deny", "readwrite", "readonly", "writeonly"]
+  UserName:
+    Type: String
+    Default: "dummyUser"
+  OwnerName:
+    Type: String
+    Default: "Dummy Owner"
+  UserNamePath:
+    Type: String
+    Default: ""
+  PublicKey:
+    Type: String
+    Default: ""
+
+Mappings:
+  # prod service account
+  "48498709":
+    ap-southeast-1:
+      Environment: prod
+
+  # nonprod service account
+  "92818288":
+    ap-southeast-1:
+      Environment: nonprod
+    policy:
+      readwrite: "{\n\"Version\":\"2012-10-17\",\n\"Statement\":[\n{\n\"Condition\":{\n\"StringLike\":{\n\"s3:prefix\":[\n\"${transfer:HomeFolder}/*\",\n\"${transfer:HomeFolder}\"\n]\n}\n},\n\"Action\":[\n\"s3:ListBucket\"\n],\n\"Resource\":[\n\"arn:aws:s3:::${transfer:HomeBucket}\"\n],\n\"Effect\":\"Allow\"\n},\n{\n\"Action\":[\n\"s3:ListAllMyBuckets\",\n\"s3:GetBucketLocation\"\n],\n\"Resource\":[\n\"*\"\n],\n\"Effect\":\"Allow\"\n},\n{\n\"Action\":[\n\"s3:PutObject\",\n\"s3:GetObject\",\n\"s3:DeleteObjectVersion\",\n\"s3:DeleteObject\",\n\"s3:GetObjectVersion\"\n],\n\"Resource\":[\n\"arn:aws:s3:::${transfer:HomeDirectory}*\"\n],\n\"Effect\":\"Allow\"\n},\n{\n\"Action\":[\n\"kms:Encrypt\",\n\"kms:Decrypt\",\n\"kms:DescribeKey\",\n\"kms:GenerateDataKey*\",\n\"kms:ReEncrypt*\"\n],\n\"Resource\":\"arn:aws:kms:ap-southeast-1:206874946147:key/2e90f462-b0fb-4918-b2fe-201628e22d38\",\n\"Effect\":\"Allow\"\n},\n{\n\"Action\":[\n\"s3:PutObject\"\n],\n\"Resource\":[\n\"arn:aws:s3:::${transfer:HomeBucket}/* *\"\n],\n\"Effect\":\"Deny\"\n}\n]\n}"
+      deny: "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Condition\":{\"StringLike\":{\"s3:prefix\":[\"${transfer:HomeFolder}/*\",\"${transfer:HomeFolder}\"]}},\"Action\":[\"s3:ListBucket\"],\"Resource\":[\"arn:aws:s3:::${transfer:HomeBucket}\"],\"Effect\":\"Allow\"},{\"Action\":[\"s3:ListAllMyBuckets\",\"s3:GetBucketLocation\"],\"Resource\":[\"*\"],\"Effect\":\"Allow\"}]}"
+      readonly: "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Condition\":{\"StringLike\":{\"s3:prefix\":[\"${transfer:HomeFolder}/*\",\"${transfer:HomeFolder}\"]}},\"Action\":[\"s3:ListBucket\"],\"Resource\":[\"arn:aws:s3:::${transfer:HomeBucket}\"],\"Effect\":\"Allow\"},{\"Action\":[\"s3:ListAllMyBuckets\",\"s3:GetBucketLocation\"],\"Resource\":[\"*\"],\"Effect\":\"Allow\"},{\"Action\":[\"s3:GetObject\",\"s3:GetObjectVersion\"],\"Resource\":[\"arn:aws:s3:::${transfer:HomeDirectory}*\"],\"Effect\":\"Allow\"},{\"Action\":[\"kms:Encrypt\",\"kms:Decrypt\",\"kms:DescribeKey\",\"kms:GenerateDataKey*\",\"kms:ReEncrypt*\"],\"Resource\":\"arn:aws:kms:ap-southeast-1:206874946147:key/2e90f462-b0fb-4918-b2fe-201628e22d38\",\"Effect\":\"Allow\"},{\"Action\":[\"s3:PutObject\"],\"Resource\":[\"arn:aws:s3:::${transfer:HomeBucket}/* *\"],\"Effect\":\"Deny\"}]}"
+      writeonly: "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Condition\":{\"StringLike\":{\"s3:prefix\":[\"${transfer:HomeFolder}/*\",\"${transfer:HomeFolder}\"]}},\"Action\":[\"s3:ListBucket\"],\"Resource\":[\"arn:aws:s3:::${transfer:HomeBucket}\"],\"Effect\":\"Allow\"},{\"Action\":[\"s3:ListAllMyBuckets\",\"s3:GetBucketLocation\"],\"Resource\":[\"*\"],\"Effect\":\"Allow\"},{\"Action\":[\"s3:PutObject\",\"s3:PutObjectVersion\"],\"Resource\":[\"arn:aws:s3:::${transfer:HomeDirectory}*\"],\"Effect\":\"Allow\"},{\"Action\":[\"kms:Encrypt\",\"kms:Decrypt\",\"kms:DescribeKey\",\"kms:GenerateDataKey*\",\"kms:ReEncrypt*\"],\"Resource\":\"arn:aws:kms:ap-southeast-1:206874946147:key/2e90f462-b0fb-4918-b2fe-201628e22d38\",\"Effect\":\"Allow\"},{\"Action\":[\"s3:PutObject\"],\"Resource\":[\"arn:aws:s3:::${transfer:HomeBucket}/* *\"],\"Effect\":\"Deny\"}]}"
+    path:
+      readwrite: ""
+      deny: ""
+      readonly: "/outgoing"
+      writeonly: "/incoming"
+
+
+Conditions:
+  ServiceAccount:
+    Fn::Or:
+      - Fn::Equals: [ Ref: 'AWS::AccountId', '48498209' ]  # prod-service
+      - Fn::Equals: [ Ref: 'AWS::AccountId', '928167388' ]  # nonprod-service
+  CustomPath: !Not [!Equals [!Ref UserNamePath, ""]]
+
+Resources:
+
+  InternalSftpUser:
+    Type: AWS::Transfer::User
+    Condition: ServiceAccount
+    Properties:
+      UserName: !Ref UserName
+      HomeDirectory:
+        !Join
+        - ''
+        - - "/"
+          - !Ref S3BucketInternal
+          - "-"
+          - !FindInMap [Ref: "AWS::AccountId", Ref: "AWS::Region", Environment]
+          - !If [ CustomPath, !Sub "/home/${UserNamePath}", !Sub "/home/${UserName}" ]
+          - !FindInMap [Ref: "AWS::AccountId", "path", !Ref ScopeDownPolicy]
+      Policy: !FindInMap [Ref: "AWS::AccountId", "policy", Ref: ScopeDownPolicy]
+      Role:
+        Fn::ImportValue:
+          Fn::Sub: "${S3StackName}:RoleArn"
+      ServerId:
+        Fn::ImportValue:
+          Fn::Sub: "${SftpStackName}:InternalSftpServerId"
+      SshPublicKeys:
+        - !Ref PublicKey
+      Tags:
+        - Key: Owner
+          Value: !Ref OwnerName
