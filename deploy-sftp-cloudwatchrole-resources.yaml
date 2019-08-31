@@ -1,0 +1,58 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: 'role for AWS SFTP  - resources'
+Parameters:
+  Name:
+    Type: String
+    Default: ""
+
+Conditions:
+  ServiceAccount:
+    Fn::Or:
+      - Fn::Equals: [ Ref: 'AWS::AccountId', '92818288' ] # nonprod-service
+
+Resources:
+  # Bulk of Resource declaration here
+  SFTPCloudWatchRole:
+    Type: "AWS::IAM::Role"
+    Condition: ServiceAccount
+    Properties: 
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement: 
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "transfer.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      RoleName: !Join ['-', [!Ref Name, "cloudwatchlog"]]
+      Policies: 
+        - PolicyName: "cloudwatchlog-sftp"
+          PolicyDocument: 
+            Version: "2012-10-17"
+            Statement: 
+              - Effect: "Allow"
+                Action: 
+                  - "logs:PutLogEvents"
+                  - "logs:DescribeLogStreams"
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                Resource: "*"
+
+Outputs:
+  EC2Role:
+    Value:
+      Ref: SFTPCloudWatchRole
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}:RoleName"
+
+  RoleArn:
+    Value:
+      Fn::GetAtt: [ SFTPCloudWatchRole, Arn ]
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}:RoleArn"        
+
