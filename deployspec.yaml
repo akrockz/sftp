@@ -1,0 +1,150 @@
+---
+- label: deploy-coreservices-sftp-kms-nonprod-service
+  type: create_stack
+  params:
+    template: deploy-sftp-kms-resources.yaml
+    stack_name: "{{ core.Project }}-{{ core.App }}-kms-nonprod-service"
+    parameters:
+      Name: "{{ core.Project }}-{{ core.App }}-kms-nonprod-service"
+      TargetAccount: "928168288"  # nonprod-service
+    accounts:
+      - "206874147"  # compliance account
+    regions:
+      - ap-southeast-1  # Asia Pacific (Singapore)
+
+- label: deploy-coreservices-sftp-cloudwatchrole
+  type: create_stack
+  params:
+    template: deploy-sftp-cloudwatchrole-resources.yaml
+    stack_name: "{{ core.Project }}-{{ core.App }}-cloudwatchrole"
+    parameters:
+      Name: "{{ core.Project }}-{{ core.App }}-cloudwatchrole"
+    accounts:
+      - "928178288"  # nonprod-service
+      - "484981709"  # prod-service
+    regions:
+      - ap-southeast-1  # Asia Pacific (Singapore)
+
+- label: deploy-coreservices-sftp-s3bucket
+  type: create_stack
+  depends_on: [deploy-coreservices-sftp-kms-nonprod-service, deploy-coreservices-sftp-kms-prod-service]
+  params:
+    template: deploy-sftp-s3bucket-resources.yaml
+    stack_name: "{{ core.Project }}-{{ core.App }}-s3bucket"
+    parameters:
+      Name: "{{ core.Project }}-{{ core.App }}-s3bucket"
+      CustomKMSKey: "yes"
+    accounts:
+      - "928167388"  # nonprod-service
+      - "484982709"  # prod-service
+    regions:
+      - ap-southeast-1  # Asia Pacific (Singapore)
+
+- label: deploy-coreservices-sftp-securitygroup
+  type: create_stack
+  params:
+    template: deploy-sftp-vpce-securitygroup.yaml
+    stack_name: "{{ core.Project }}-{{ core.App }}-securitygroup"
+    parameters:
+      Name: "{{ core.Project }}-{{ core.App }}-securitygroup"
+      VpcName: "ServicesVpc"
+    accounts:
+      - "928167288"  # nonprod-service
+      - "484981709"  # prod-service
+    regions:
+      - ap-southeast-1  # Asia Pacific (Singapore)
+
+# Migrate to core-network vpc-services.yaml
+- label: deploy-coreservices-sftp-vpce
+  type: create_stack
+  depends_on: [deploy-coreservices-sftp-securitygroup]
+  params:
+    template: deploy-sftp-vpce-resources.yaml
+    stack_name: "{{ core.Project }}-{{ core.App }}-vpce"
+    parameters:
+      Name: "{{ core.Project }}-{{ core.App }}-vpce"
+      VpcName: "ServicesVpc"
+      SecurityGroupStackName: "{{ core.Project }}-{{ core.App }}-securitygroup"
+      AzList: { "Fn::Join": [ ",", "Fn::GetAZs": "" ] }
+    accounts:
+      - "928167388"  # nonprod-service
+      - "484982709"  # prod-service
+    regions:
+      - ap-southeast-1  # Asia Pacific (Singapore)
+
+- label: deploy-coreservices-sftp-sftpserver-resource
+  type: create_stack
+  depends_on: [deploy-coreservices-sftp-vpce]
+  params:
+    template: deploy-sftp-sftpserver-resources.yaml
+    stack_name: "{{ core.Project }}-{{ core.App }}-sftpserver"
+    parameters:
+      Name: "{{ core.Project }}-{{ core.App }}-sftpserver"
+      VpceStackName: "{{ core.Project }}-{{ core.App }}-vpce"
+      CloudWatchStackName: "{{ core.Project }}-{{ core.App }}-cloudwatchrole"
+      Portfolio: "{{ core.Project }}"
+      App: "{{ core.App }}"
+      AzList: { "Fn::Join": [ ",", "Fn::GetAZs": "" ] }
+      VpcName: "ServicesVpc"
+    accounts:
+      - "928167288"  # nonprod-service
+      - "48498709"  # prod-service
+    regions:
+      - ap-southeast-1  # Asia Pacific (Singapore)
+
+- label: deploy-coreservices-sftp-route53
+  type: create_stack
+  depends_on: [deploy-coreservices-sftp-sftpserver-resource]
+  params:
+    template: deploy-sftp-route53-resources.yaml
+    stack_name: "{{ core.Project }}-{{ core.App }}-route53"
+    parameters:
+      Name: "{{ core.Project }}-{{ core.App }}-route53"
+      SftpStackName: "{{ core.Project }}-{{ core.App }}-sftpserver"
+    accounts:
+      - "928167388"  # nonprod-service
+      - "484971709"  # prod-service
+    regions:
+      - ap-southeast-1  # Asia Pacific (Singapore)
+
+# The following 2 users ID creations had been commented out as
+# userid creation had been shifted to coreservices-sftpusers
+
+#- label: deploy-coreservices-sftp-sftpusers-internal
+#  type: delete_stack
+#  depends_on: [deploy-coreservices-sftp-sftpserver-resource]
+#  params:
+#    template: deploy-sftp-sftpusers-internal.yaml
+#    stack_name: "{{ core.Project }}-{{ core.App }}-sftpusers-internal"
+#    parameters:
+#      SftpStackName: "{{ core.Project }}-{{ core.App }}-sftpserver"
+#      S3StackName: "{{ core.Project }}-{{ core.App }}-s3bucket"
+#      ScopeDownPolicy: "readwrite"
+#      UserName: "asds"
+#      UserNamePath: "adsad"
+#      OwnerName: "abcoueww"
+#      PublicKey: "ssh-rsa AAAAB3Nza121C1yc2EAAAADAQABAAABAQC63Y70jbtXvPNfjssEXhTnQyGA2pmXXxNckiiJR71lltQ5QWDXjKOEpspz3/rOZNT9et3AuFuO3qnp2BC9BM8JuopPDovdofxqKiyke1YekIPF2ux5DXPiHrv75DaBld91Q1SaLZvBaFvYKpAOkXXfkVOC7K1SyhQmSeh0400wlBrACCzqLAZ/0YKudor/Kr/cQDeIkjYDwR3rG+546C/UQdZ4yZBtPe/CXZXioBWA12IARAd8xTJGYsLvR1StgQvBKdTXS8jdvN9KEKsZYkiQLJIp4+2AFy7iMvvnlzhV/6Vb8WkxAI3DE7oY3eRA/X9NvcO0wk4L1ZknlymVUdAN abc@com"
+#    accounts:
+#      - "928167378288"  # nonprod-service
+#    regions:
+#      - ap-southeast-1  # Asia Pacific (Singapore)
+
+#- label: deploy-coreservices-sftp-sftpusers-internal-customS3
+#  type: delete_stack
+#  depends_on: [deploy-coreservices-sftp-sftpserver-resource]
+#  params:
+#    template: deploy-sftp-sftpusers-internal-customS3.yaml
+#    stack_name: "{{ core.Project }}-{{ core.App }}-sftpusers-internal-customS3"
+#    parameters:
+#      SftpStackName: "{{ core.Project }}-{{ core.App }}-sftpserver"
+#      TargetS3Bucket: "saa-scriptserver-nonprod-s3reportdata"
+#      UserName: "s3reportdata"
+#      UserNamePath: "qwq"
+#      OwnerName: "qdwd"
+#      PublicKey: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC63Y70jbqweetXvPNfjssEXhTnQyGA2pmXXxNckiiJR71lltQ5QWDXjKOEpspz3/rOZNT9et3AuFuO3qnp2BC9BM8JuopPDovdofxqKiyke1YekIPF2ux5DXPiHrv75DaBld91Q1SaLZvBaFvYKpAOkXXfkVOC7K1SyhQmSeh0400wlBrACCzqLAZ/0YKudor/Kr/cQDeIkjYDwR3rG+546C/UQdZ4yZBtPe/CXZXioBWA12IARAd8xTJGYsLvR1StgQvBKdTXS8jdvN9KEKsZYkiQLJIp4+2AFy7iMvvnlzhV/6Vb8WkxAI3DE7oY3eRA/X9NvcO0wk4L1ZknlymVUdAN abc@com"
+#      # Custom KMS key of target S3 Bucket
+#      KmsKeyArn: "arn:aws:kms:ap-southeast-1:274946147:key/1894dc89-0e9d-480a-bbe6-08ec4dad38a9"
+#    accounts:
+#      - "34312421"  # nonprod-service
+#    regions:
+#      - ap-southeast-1  # Asia Pacific (Singapore)
